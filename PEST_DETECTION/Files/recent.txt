@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CritterCheck - Object Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-image: url('https://i.pinimg.com/564x/c5/18/8a/c5188a2610dd2858c97eacada559f20a.jpg');
+            background-size: cover;
+            background-position: center;
+            opacity: 0.9; /* Set the transparency of the background */
+        }
+        h1 {
+            color: black; /* Text color for the title */
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #uploadContainer {
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        #results {
+            margin-top: 20px;
+            text-align: center;
+        }
+        img {
+            max-width: 100%; /* Ensure images fit within their containers */
+            height: auto; /* Maintain aspect ratio */
+            margin: 10px;
+            border-radius: 5px;
+        }
+        .side-by-side {
+            display: flex;               /* Use flexbox layout */
+            justify-content: space-around; /* Space items around */
+            align-items: center;         /* Align the items vertically */
+            margin-top: 20px;           /* Optional: add some space above the images */
+        }
+        
+        .image-container {
+            flex: 1; /* Allow each image container to take equal space */
+            padding: 10px; /* Add padding around the images */
+            text-align: center; /* Center the text and images */
+        }
+    </style>
+    <script>
+        async function detectObjects() {
+            const formData = new FormData();
+            const imageFile = document.getElementById('imageFile').files[0];
+
+            if (!imageFile) {
+                alert("Please select an image file to upload.");
+                return;
+            }
+
+            formData.append('image', imageFile);
+
+            const response = await fetch('/detect', { 
+                method: 'POST', 
+                body: formData 
+            });
+            const data = await response.json();
+
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';  // Clear previous results
+
+            if (response.ok) {
+                // Display success message and output file
+                resultsDiv.innerHTML += `<p>${data.message}</p>`;
+                resultsDiv.innerHTML += `<div class="side-by-side">`;
+                resultsDiv.innerHTML += `<div class="image-container"><h3>Input Image:</h3><img src="${URL.createObjectURL(imageFile)}" alt="Input Image"></div>`;
+
+                // Generate a unique identifier to avoid caching
+                const uniqueId = new Date().getTime(); // or use Math.random()
+                resultsDiv.innerHTML += `<div class="image-container"><h3>Output Image:</h3><img src="/output/output.jpg?${uniqueId}" alt="Output Image"></div>`;
+                resultsDiv.innerHTML += `</div>`;
+
+                // Display predicted pests and their accuracies
+                if (data.pests && data.pests.length > 0) {
+                    resultsDiv.innerHTML += '<h3>Predicted Pests:</h3><ul>';
+                    data.pests.forEach(pest => {
+                        resultsDiv.innerHTML += `<li>${pest.name}: ${pest.accuracy}</li>`;
+                    });
+                    resultsDiv.innerHTML += '</ul>';
+                } else {
+                    resultsDiv.innerHTML += '<p>No pests detected.</p>';
+                }
+            } else {
+                resultsDiv.innerHTML += `<p>Error: ${data.error}</p>`;
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="uploadContainer">
+        <h1>CritterCheck</h1>
+        <input type="file" id="imageFile" accept="image/*" required>
+        <button onclick="detectObjects()">Detect Objects</button>
+        <div id="results"></div>  <!-- Div to show results -->
+    </div>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from flask import Flask, jsonify, send_from_directory, request
+from azure.cognitiveservices.vision.customvision.prediction import CustomVisionPredictionClient
+from msrest.authentication import ApiKeyCredentials
+from dotenv import load_dotenv
+import os
+from PIL import Image, ImageDraw
+import numpy as np
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
+
+@app.route('/detect', methods=['POST'])
+def detect_objects():
+    try:
+        load_dotenv()
+        prediction_endpoint = os.getenv('PredictionEndpoint')
+        prediction_key = os.getenv('PredictionKey')
+        project_id = os.getenv('ProjectID')
+        model_name = os.getenv('ModelName')
+
+        if not all([prediction_endpoint, prediction_key, project_id, model_name]):
+            raise ValueError("One or more environment variables are missing or invalid.")
+
+        credentials = ApiKeyCredentials(in_headers={"Prediction-key": prediction_key})
+        prediction_client = CustomVisionPredictionClient(prediction_endpoint, credentials)
+
+        if 'image' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+        
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Overwrite input.jpg and output.jpg
+        input_file_name = 'input.jpg'
+        output_file_name = 'output.jpg'
+
+        # Save the uploaded image to input.jpg
+        image_file.save(input_file_name)
+
+        # Open the image for processing
+        image = Image.open(input_file_name)
+        h, w, ch = np.array(image).shape
+
+        with open(input_file_name, mode="rb") as image_data:
+            results = prediction_client.detect_image(project_id, model_name, image_data)
+
+        image_with_boxes = process_results(image, results, h, w)
+
+        # Save the processed image as output.jpg
+        image_with_boxes.save(output_file_name)
+
+        pest_info = []
+        if hasattr(results, 'predictions'):
+            for prediction in results.predictions:
+                if (prediction.probability * 100) > 50:
+                    pest_info.append({
+                        "name": prediction.tag_name,
+                        "accuracy": f"{prediction.probability * 100:.2f}%"
+                    })
+
+        return jsonify({
+            "message": "Detection complete", 
+            "output_file": f"/output/{output_file_name}",
+            "pests": pest_info
+        })
+
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+
+@app.route('/output/<filename>')
+def get_output_image(filename):
+    return send_from_directory('.', filename)
+
+def process_results(image, results, h, w):
+    draw = ImageDraw.Draw(image)
+    if hasattr(results, 'predictions'):
+        for prediction in results.predictions:
+            if (prediction.probability * 100) > 50:
+                left = prediction.bounding_box.left * w
+                top = prediction.bounding_box.top * h
+                width = prediction.bounding_box.width * w
+                height = prediction.bounding_box.height * h
+
+                points = [(left, top), (left + width, top), (left + width, top + height), (left, top + height)]
+                draw.line(points + [points[0]], fill="magenta", width=int(w / 100))
+
+                tag_name = f"{prediction.tag_name}: {prediction.probability * 100:.2f}%"
+                draw.text((left, top), tag_name, fill="magenta")
+
+    return image
+
+if __name__ == "__main__":
+    app.run(debug=True)

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CritterCheck - Object Detection</title>
+    <style>
+        /* Main container for everything */
+        .main-container {
+            text-align: center;
+        }
+
+        /* Container to hold the input and output images */
+        .image-container {
+            display: flex; /* Use flexbox layout to put images side by side */
+            justify-content: space-between; /* Add space between images */
+            align-items: center; /* Align items vertically center */
+            margin-top: 20px;
+        }
+
+        /* Input and output images should take 50% of their container */
+        .image-frame {
+            width: 50%;
+            padding: 10px;
+        }
+
+        img {
+            width: 100%; /* Ensure images scale to 100% of their container width */
+            height: auto; /* Maintain the aspect ratio */
+            border: 1px solid #000;
+        }
+
+        /* Style for the pest prediction */
+        .pest-info {
+            margin-bottom: 20px; /* Add space before the images */
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <h1>CritterCheck</h1>
+        <input type="file" id="imageFile" accept="image/*" required>
+        <button onclick="detectObjects()">Detect Objects</button>
+        
+        <div id="results"></div> <!-- Div to show results -->
+    </div>
+
+    <script>
+        async function detectObjects() {
+            const formData = new FormData();
+            const imageFile = document.getElementById('imageFile').files[0];
+
+            if (!imageFile) {
+                alert("Please select an image file to upload.");
+                return;
+            }
+
+            formData.append('image', imageFile);
+
+            const response = await fetch('/detect', { 
+                method: 'POST', 
+                body: formData 
+            });
+            const data = await response.json();
+
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';  // Clear previous results
+
+            if (response.ok) {
+                // Display predicted pests and their accuracies
+                if (data.pests && data.pests.length > 0) {
+                    let pestsHtml = '<div class="pest-info"><h3>Predicted Pests:</h3>';
+                    data.pests.forEach(pest => {
+                        pestsHtml += `<p>${pest.name}: ${pest.accuracy}</p>`;
+                    });
+                    pestsHtml += '</div>';
+                    resultsDiv.innerHTML += pestsHtml;
+                } else {
+                    resultsDiv.innerHTML += '<p class="pest-info">No pests detected.</p>';
+                }
+
+                // Display input and output images side by side
+                resultsDiv.innerHTML += `
+                    <div class="image-container">
+                        <div class="image-frame">
+                            <h3>Input Image:</h3>
+                            <img src="${URL.createObjectURL(imageFile)}" alt="Input Image">
+                        </div>
+                        <div class="image-frame">
+                            <h3>Output Image:</h3>
+                            <img src="/output/output.jpg?${new Date().getTime()}" alt="Output Image">
+                        </div>
+                    </div>
+                `;
+            } else {
+                resultsDiv.innerHTML += `<p>Error: ${data.error}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
